@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { AppError } from '../errors/AppError';
+import { createLessonProgressRepository } from '../repositories/lessonProgressRepository';
 import { lessonProgressService } from '../services/lessonProgressService';
 
 const completeLessonParamsSchema = z.object({
@@ -30,6 +31,25 @@ export const completeLesson = async (
       ok: true,
       progress: result.progress,
       courseProgress: result.courseProgress,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getLessonCompletions = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { lessonId } = completeLessonParamsSchema.parse(req.params);
+    // 데모 확인용 조회라 컨트롤러에서 바로 저장소를 호출해 응답을 구성합니다.
+    const completions = createLessonProgressRepository().findCompletionsByLesson(lessonId);
+
+    res.status(200).json({
+      ok: true,
+      completions,
     });
   } catch (error) {
     next(error);
