@@ -1,0 +1,74 @@
+name: AI Review Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  ai-review-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Public fork PRs do not receive repository secrets; production use needs a separate secret-handling design.
+      - name: Run AI Review Gate
+        id: ai_review
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npm run ai-review:ci
+
+      - name: Ensure report exists
+        if: always()
+        run: |
+          mkdir -p reports
+          if [ ! -f reports/review-report.md ]; then
+            {
+              echo "# AI Review Gate Report"
+              echo
+              echo "The AI Review Gate did not generate a report. Check the workflow logs."
+              echo
+              echo "---"
+              echo
+              echo "This is an advisory review. Humans remain responsible for final approval."
+            } > reports/review-report.md
+          fi
+
+      - name: Upload review reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-gate-reports
+          path: reports/
+
+      - name: Comment on PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file reports/review-report.md
+
+      - name: Fail when review command failed
+        if: steps.ai_review.outcome == 'failure'
+        run: exit 1

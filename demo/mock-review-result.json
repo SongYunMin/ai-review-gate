@@ -1,0 +1,61 @@
+{
+  "summary": "The demo patch moves lesson completion logic into the controller and skips core backend safeguards required by AGENTS.md.",
+  "riskLevel": "HIGH",
+  "shouldBlockMerge": true,
+  "findings": [
+    {
+      "category": "AUTHORIZATION",
+      "severity": "HIGH",
+      "file": "src/controllers/lessonProgressController.ts",
+      "lineHint": "completeLesson repository calls",
+      "problem": "The controller creates lesson progress without verifying that the user owns or is enrolled in the lesson's course.",
+      "suggestion": "Move completion through LessonProgressService and verify enrollment before any write.",
+      "relatedRule": "User-specific data access must verify ownership or enrollment."
+    },
+    {
+      "category": "TRANSACTION",
+      "severity": "HIGH",
+      "file": "src/controllers/lessonProgressController.ts",
+      "lineHint": "createCompletion + incrementCompletedLessonCount",
+      "problem": "The patch performs two related writes without a transaction boundary, so lesson progress and course progress can diverge.",
+      "suggestion": "Wrap both writes in a service-level transaction or unit-of-work operation.",
+      "relatedRule": "Write operations that update multiple tables must use transactions."
+    },
+    {
+      "category": "IDEMPOTENCY",
+      "severity": "MEDIUM",
+      "file": "src/controllers/lessonProgressController.ts",
+      "lineHint": "createCompletion call",
+      "problem": "Repeated completion requests can create duplicate progress rows and increment course progress more than once.",
+      "suggestion": "Check for an existing completion first and return the existing result without incrementing again.",
+      "relatedRule": "APIs that can be retried must be idempotent when possible."
+    },
+    {
+      "category": "MAINTAINABILITY",
+      "severity": "MEDIUM",
+      "file": "src/controllers/lessonProgressController.ts",
+      "lineHint": "direct repository imports",
+      "problem": "The controller imports repositories directly and now owns business workflow decisions.",
+      "suggestion": "Keep the controller thin and delegate lesson completion to LessonProgressService.",
+      "relatedRule": "Repositories should not be called directly from controllers."
+    },
+    {
+      "category": "ERROR_HANDLING",
+      "severity": "MEDIUM",
+      "file": "src/controllers/lessonProgressController.ts",
+      "lineHint": "catch block",
+      "problem": "The response returns the raw internal error message to the client.",
+      "suggestion": "Return a safe public error message and log internal details server-side.",
+      "relatedRule": "Do not expose internal error messages to clients."
+    },
+    {
+      "category": "TEST_GAP",
+      "severity": "MEDIUM",
+      "file": "tests/lessonProgress.test.ts",
+      "lineHint": "happy path only",
+      "problem": "The changed tests only cover successful completion and would not catch authorization, duplicate request, or partial write failures.",
+      "suggestion": "Add tests for authorization failure, duplicate requests, transaction failure, and validation failure.",
+      "relatedRule": "Add tests for authorization failure, duplicate requests, transaction failure, and validation failure when relevant."
+    }
+  ]
+}
