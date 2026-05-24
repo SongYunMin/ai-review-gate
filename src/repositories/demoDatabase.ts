@@ -29,6 +29,7 @@ export type DemoDatabase = {
   courseProgress: CourseProgress[];
 };
 
+// 외부 DB 없이도 Review Gate 발표를 재현할 수 있도록 고정된 인메모리 seed를 사용합니다.
 const createSeedDatabase = (): DemoDatabase => ({
   lessons: [
     { id: 'lesson-1', courseId: 'course-1', title: '분수의 기초' },
@@ -48,6 +49,7 @@ const createSeedDatabase = (): DemoDatabase => ({
 
 export const demoDatabase: DemoDatabase = createSeedDatabase();
 
+// 트랜잭션 데모에서 작업 중 데이터와 커밋된 데이터를 분리하기 위한 얕은 레코드 복사입니다.
 const cloneDatabase = (database: DemoDatabase): DemoDatabase => ({
   lessons: database.lessons.map((lesson) => ({ ...lesson })),
   enrollments: database.enrollments.map((enrollment) => ({ ...enrollment })),
@@ -63,6 +65,7 @@ const replaceDatabase = (target: DemoDatabase, source: DemoDatabase): void => {
 };
 
 export const resetDatabase = (): void => {
+  // 테스트마다 같은 시작 상태를 보장해 중복 완료와 권한 실패를 안정적으로 검증합니다.
   replaceDatabase(demoDatabase, createSeedDatabase());
 };
 

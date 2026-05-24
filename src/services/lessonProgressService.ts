@@ -16,8 +16,11 @@ export type CompleteLessonResult = {
   courseProgress: CourseProgress;
 };
 
+// 서비스는 AGENTS.md의 핵심 규칙을 보여주는 중심 계층입니다.
+// 컨트롤러 대신 여기서 권한 확인, 멱등 처리, 트랜잭션 경계를 모두 결정합니다.
 export class LessonProgressService {
   async completeLesson(input: CompleteLessonInput): Promise<CompleteLessonResult> {
+    // 쓰기 전에 강의 존재 여부와 수강 권한을 먼저 확인해 사용자별 데이터 접근을 보호합니다.
     const lessonRepository = createLessonProgressRepository();
     const lesson = lessonRepository.findLessonById(input.lessonId);
 
@@ -38,6 +41,7 @@ export class LessonProgressService {
         input.lessonId,
       );
 
+      // 같은 완료 요청이 재시도되어도 코스 진도가 중복 증가하지 않도록 기존 결과를 반환합니다.
       if (existingProgress) {
         return {
           progress: existingProgress,

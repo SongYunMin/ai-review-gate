@@ -8,7 +8,7 @@ describe('POST /api/lessons/:lessonId/complete', () => {
     resetDemoData();
   });
 
-  it('completes an enrolled lesson and updates course progress once', async () => {
+  it('수강 등록된 강의를 완료하고 코스 진도를 한 번만 업데이트한다', async () => {
     const firstResponse = await request(app)
       .post('/api/lessons/lesson-1/complete')
       .set('x-user-id', 'user-1')
@@ -38,7 +38,7 @@ describe('POST /api/lessons/:lessonId/complete', () => {
     expect(duplicateResponse.body.courseProgress.completedLessonCount).toBe(1);
   });
 
-  it('rejects completion when the user is not enrolled in the lesson course', async () => {
+  it('사용자가 강의 코스에 수강 등록되어 있지 않으면 완료 처리를 거절한다', async () => {
     const response = await request(app)
       .post('/api/lessons/lesson-3/complete')
       .set('x-user-id', 'user-1')
@@ -52,7 +52,7 @@ describe('POST /api/lessons/:lessonId/complete', () => {
     });
   });
 
-  it('returns validation error for an unknown lesson id', async () => {
+  it('알 수 없는 강의 id에는 검증 오류를 반환한다', async () => {
     const response = await request(app)
       .post('/api/lessons/unknown-lesson/complete')
       .set('x-user-id', 'user-1')

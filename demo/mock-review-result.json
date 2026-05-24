@@ -1,5 +1,5 @@
 {
-  "summary": "The demo patch moves lesson completion logic into the controller and skips core backend safeguards required by AGENTS.md.",
+  "summary": "데모 패치는 강의 완료 로직을 컨트롤러로 옮기면서 AGENTS.md가 요구하는 핵심 백엔드 안전장치를 건너뜁니다.",
   "riskLevel": "HIGH",
   "shouldBlockMerge": true,
   "findings": [
@@ -7,55 +7,55 @@
       "category": "AUTHORIZATION",
       "severity": "HIGH",
       "file": "src/controllers/lessonProgressController.ts",
-      "lineHint": "completeLesson repository calls",
-      "problem": "The controller creates lesson progress without verifying that the user owns or is enrolled in the lesson's course.",
-      "suggestion": "Move completion through LessonProgressService and verify enrollment before any write.",
-      "relatedRule": "User-specific data access must verify ownership or enrollment."
+      "lineHint": "completeLesson 내부 repository 직접 호출부",
+      "problem": "컨트롤러가 사용자의 강의 소유권 또는 코스 수강 여부를 확인하지 않고 강의 진도를 생성합니다.",
+      "suggestion": "완료 처리는 LessonProgressService를 거치게 하고, 쓰기 전에 수강 등록 여부를 검증하세요.",
+      "relatedRule": "사용자별 데이터 접근은 소유권 또는 수강 등록 여부를 검증해야 합니다."
     },
     {
       "category": "TRANSACTION",
       "severity": "HIGH",
       "file": "src/controllers/lessonProgressController.ts",
-      "lineHint": "createCompletion + incrementCompletedLessonCount",
-      "problem": "The patch performs two related writes without a transaction boundary, so lesson progress and course progress can diverge.",
-      "suggestion": "Wrap both writes in a service-level transaction or unit-of-work operation.",
-      "relatedRule": "Write operations that update multiple tables must use transactions."
+      "lineHint": "createCompletion + incrementCompletedLessonCount 연속 호출부",
+      "problem": "관련된 두 쓰기를 트랜잭션 경계 없이 수행해 강의 진도와 코스 진도가 서로 어긋날 수 있습니다.",
+      "suggestion": "두 쓰기를 서비스 계층의 트랜잭션 또는 unit-of-work 작업 안에서 함께 처리하세요.",
+      "relatedRule": "여러 테이블을 갱신하는 쓰기 작업은 트랜잭션을 사용해야 합니다."
     },
     {
       "category": "IDEMPOTENCY",
       "severity": "MEDIUM",
       "file": "src/controllers/lessonProgressController.ts",
-      "lineHint": "createCompletion call",
-      "problem": "Repeated completion requests can create duplicate progress rows and increment course progress more than once.",
-      "suggestion": "Check for an existing completion first and return the existing result without incrementing again.",
-      "relatedRule": "APIs that can be retried must be idempotent when possible."
+      "lineHint": "createCompletion 호출부",
+      "problem": "반복된 완료 요청이 중복 진도 row를 만들고 코스 진도를 여러 번 증가시킬 수 있습니다.",
+      "suggestion": "기존 완료 기록을 먼저 확인하고, 이미 완료된 경우 다시 증가시키지 말고 기존 결과를 반환하세요.",
+      "relatedRule": "재시도될 수 있는 API는 가능하면 멱등성을 가져야 합니다."
     },
     {
       "category": "MAINTAINABILITY",
       "severity": "MEDIUM",
       "file": "src/controllers/lessonProgressController.ts",
-      "lineHint": "direct repository imports",
-      "problem": "The controller imports repositories directly and now owns business workflow decisions.",
-      "suggestion": "Keep the controller thin and delegate lesson completion to LessonProgressService.",
-      "relatedRule": "Repositories should not be called directly from controllers."
+      "lineHint": "repository 직접 import 구간",
+      "problem": "컨트롤러가 repository를 직접 import하고 비즈니스 흐름 판단까지 맡고 있습니다.",
+      "suggestion": "컨트롤러는 얇게 유지하고 강의 완료 흐름은 LessonProgressService에 위임하세요.",
+      "relatedRule": "컨트롤러는 repository를 직접 호출하지 않아야 합니다."
     },
     {
       "category": "ERROR_HANDLING",
       "severity": "MEDIUM",
       "file": "src/controllers/lessonProgressController.ts",
-      "lineHint": "catch block",
-      "problem": "The response returns the raw internal error message to the client.",
-      "suggestion": "Return a safe public error message and log internal details server-side.",
-      "relatedRule": "Do not expose internal error messages to clients."
+      "lineHint": "catch 블록",
+      "problem": "응답이 내부 오류 메시지를 그대로 클라이언트에 반환합니다.",
+      "suggestion": "클라이언트에는 안전한 공개 메시지만 반환하고, 내부 상세 정보는 서버에서만 로깅하세요.",
+      "relatedRule": "내부 오류 메시지를 클라이언트에 노출하면 안 됩니다."
     },
     {
       "category": "TEST_GAP",
       "severity": "MEDIUM",
       "file": "tests/lessonProgress.test.ts",
-      "lineHint": "happy path only",
-      "problem": "The changed tests only cover successful completion and would not catch authorization, duplicate request, or partial write failures.",
-      "suggestion": "Add tests for authorization failure, duplicate requests, transaction failure, and validation failure.",
-      "relatedRule": "Add tests for authorization failure, duplicate requests, transaction failure, and validation failure when relevant."
+      "lineHint": "성공 경로만 검증하는 테스트",
+      "problem": "변경된 테스트가 성공 경로만 다루고 있어 권한 실패, 중복 요청, 부분 쓰기 실패를 잡지 못합니다.",
+      "suggestion": "권한 실패, 중복 요청, 트랜잭션 실패, 검증 실패 테스트를 추가하세요.",
+      "relatedRule": "관련성이 있는 경우 권한 실패, 중복 요청, 트랜잭션 실패, 검증 실패 테스트를 추가해야 합니다."
     }
   ]
 }

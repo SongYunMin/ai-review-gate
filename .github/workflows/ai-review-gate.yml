@@ -14,22 +14,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: 저장소 체크아웃
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Node.js 설정
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: npm ci
 
-      # Public fork PRs do not receive repository secrets; production use needs a separate secret-handling design.
-      - name: Run AI Review Gate
+      # 공개 fork PR에는 저장소 secret이 전달되지 않으므로, 운영 적용 시 별도의 secret 처리 설계가 필요합니다.
+      - name: AI Review Gate 실행
         id: ai_review
         continue-on-error: true
         env:
@@ -39,36 +39,36 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: npm run ai-review:ci
 
-      - name: Ensure report exists
+      - name: 리포트 파일 보장
         if: always()
         run: |
           mkdir -p reports
           if [ ! -f reports/review-report.md ]; then
             {
-              echo "# AI Review Gate Report"
+              echo "# AI Review Gate 리포트"
               echo
-              echo "The AI Review Gate did not generate a report. Check the workflow logs."
+              echo "AI Review Gate가 리포트를 생성하지 못했습니다. 워크플로 로그를 확인하세요."
               echo
               echo "---"
               echo
-              echo "This is an advisory review. Humans remain responsible for final approval."
+              echo "이 리포트는 보조 검토 자료이며, 최종 승인은 사람이 책임집니다."
             } > reports/review-report.md
           fi
 
-      - name: Upload review reports
+      - name: 리뷰 리포트 업로드
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-review-gate-reports
           path: reports/
 
-      - name: Comment on PR
+      - name: PR에 리포트 코멘트 작성
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr comment "$PR_NUMBER" --body-file reports/review-report.md
 
-      - name: Fail when review command failed
+      - name: 리뷰 명령 실패 시 워크플로 실패 처리
         if: steps.ai_review.outcome == 'failure'
         run: exit 1

@@ -1,40 +1,40 @@
 # AGENTS.md
 
-## Project Overview
+## 프로젝트 개요
 
-This repository is a small Node.js TypeScript REST API demo for an edtech lesson completion flow.
-The review gate must treat this file as the team's convention source of truth.
+이 저장소는 에듀테크 강의 완료 흐름을 보여주는 작은 Node.js TypeScript REST API 데모입니다.
+AI Review Gate는 이 파일을 팀 컨벤션의 단일 기준으로 사용해야 합니다.
 
-## Backend Architecture Rules
+## 백엔드 아키텍처 규칙
 
-- Controllers should be thin.
-- Business logic must live in service classes.
-- Repositories should not be called directly from controllers.
-- Controllers may parse request data and return responses, but they must delegate workflow decisions to services.
-- Repositories should hide storage details and should not contain request/response logic.
+- 컨트롤러는 얇게 유지해야 합니다.
+- 비즈니스 로직은 서비스 클래스에 있어야 합니다.
+- 컨트롤러에서 repository를 직접 호출하면 안 됩니다.
+- 컨트롤러는 요청 데이터를 파싱하고 응답을 반환할 수 있지만, 흐름 판단은 서비스에 위임해야 합니다.
+- Repository는 저장소 세부 구현을 감추어야 하며 요청/응답 로직을 포함하면 안 됩니다.
 
-## Data Access Rules
+## 데이터 접근 규칙
 
-- User-specific data access must verify ownership or enrollment.
-- Lesson completion must verify that the requesting user is enrolled in the lesson's course.
-- Write operations that update multiple tables must use transactions.
-- APIs that can be retried must be idempotent when possible.
+- 사용자별 데이터 접근은 소유권 또는 수강 등록 여부를 검증해야 합니다.
+- 강의 완료 처리는 요청 사용자가 해당 강의의 코스에 수강 등록되어 있는지 검증해야 합니다.
+- 여러 테이블을 갱신하는 쓰기 작업은 트랜잭션을 사용해야 합니다.
+- 재시도될 수 있는 API는 가능하면 멱등성을 가져야 합니다.
 
-## API Error Handling Rules
+## API 오류 처리 규칙
 
-- Do not expose internal error messages to clients.
-- Public API errors should use stable, user-safe messages.
-- Internal error details may be logged server-side, but must not be returned in JSON responses.
+- 내부 오류 메시지를 클라이언트에 노출하면 안 됩니다.
+- 공개 API 오류는 안정적이고 사용자에게 안전한 메시지를 사용해야 합니다.
+- 내부 오류 상세는 서버 측에서 로깅할 수 있지만 JSON 응답으로 반환하면 안 됩니다.
 
-## Test Rules
+## 테스트 규칙
 
-- Add tests for authorization failure, duplicate requests, transaction failure, and validation failure when relevant.
-- Happy-path tests are not enough for write APIs that affect user progress.
-- When changing a retryable endpoint, include an idempotency test.
+- 관련성이 있는 경우 권한 실패, 중복 요청, 트랜잭션 실패, 검증 실패 테스트를 추가해야 합니다.
+- 사용자 진도에 영향을 주는 쓰기 API는 성공 경로 테스트만으로 충분하지 않습니다.
+- 재시도 가능한 endpoint를 변경할 때는 멱등성 테스트를 포함해야 합니다.
 
-## AI Review Gate Rules
+## AI Review Gate 규칙
 
-- Review PR diffs against this file first.
-- Prefer concrete findings with file paths and line hints.
-- Do not invent findings that are not visible in the diff or directly implied by the diff.
-- Findings that affect authorization, transaction integrity, or unsafe error exposure should be treated as merge-blocking candidates.
+- PR diff를 리뷰할 때는 이 파일의 규칙을 먼저 기준으로 삼아야 합니다.
+- 파일 경로와 라인 힌트가 있는 구체적인 지적 사항을 우선해야 합니다.
+- diff에 보이지 않거나 diff에서 직접 추론되지 않는 지적 사항을 만들어내면 안 됩니다.
+- 권한, 트랜잭션 무결성, 안전하지 않은 오류 노출에 영향을 주는 지적 사항은 머지 차단 후보로 취급해야 합니다.

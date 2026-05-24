@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+// 모델 출력과 mock 결과가 같은 구조를 따르도록 리뷰 카테고리를 고정합니다.
 export const FindingCategorySchema = z.enum([
   'AUTHORIZATION',
   'INPUT_VALIDATION',
@@ -34,4 +35,5 @@ export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 
+// 리포트에서 항상 위험도가 높은 항목부터 보이도록 정렬 순서를 명시합니다.
 export const severityOrder: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];

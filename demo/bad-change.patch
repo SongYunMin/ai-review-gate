@@ -76,7 +76,7 @@ diff --git a/tests/lessonProgress.test.ts b/tests/lessonProgress.test.ts
  
 -  it('completes an enrolled lesson and updates course progress once', async () => {
 -    const firstResponse = await request(app)
-+  it('completes an enrolled lesson', async () => {
++  it('수강 등록된 강의를 완료한다', async () => {
 +    const response = await request(app)
        .post('/api/lessons/lesson-1/complete')
        .set('x-user-id', 'user-1')
