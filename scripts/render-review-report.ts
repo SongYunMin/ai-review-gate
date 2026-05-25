@@ -1,8 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  type ReviewFinding,
+  gateOrder,
+  type ReviewGate,
   type ReviewResult,
+  type ReviewViolation,
   ReviewResultSchema,
   severityOrder,
   type Severity,
@@ -12,7 +14,7 @@ export const defaultReviewResultPath = path.join('reports', 'review-result.json'
 export const defaultReviewReportPath = path.join('reports', 'review-report.md');
 
 // 리포트 상단 요약 표에서 severity별 개수를 안정적으로 보여주기 위한 집계입니다.
-const countBySeverity = (findings: ReviewFinding[]): Record<Severity, number> => {
+const countBySeverity = (violations: ReviewViolation[]): Record<Severity, number> => {
   const counts: Record<Severity, number> = {
     CRITICAL: 0,
     HIGH: 0,
@@ -20,20 +22,39 @@ const countBySeverity = (findings: ReviewFinding[]): Record<Severity, number> =>
     LOW: 0,
   };
 
-  for (const finding of findings) {
-    counts[finding.severity] += 1;
+  for (const violation of violations) {
+    counts[violation.severity] += 1;
   }
 
   return counts;
 };
 
+const countByGate = (violations: ReviewViolation[]): Record<ReviewGate, number> => {
+  const counts: Record<ReviewGate, number> = {
+    error: 0,
+    warning: 0,
+    off: 0,
+  };
+
+  for (const violation of violations) {
+    counts[violation.gate] += 1;
+  }
+
+  return counts;
+};
+
+const escapeTableCell = (value: string): string => value.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+
 // 구조화된 JSON 리뷰 결과를 사람이 읽는 한국어 Markdown 리포트로 변환합니다.
 export const renderReviewReport = (result: ReviewResult): string => {
-  const counts = countBySeverity(result.findings);
+  const severityCounts = countBySeverity(result.violations);
+  const gateCounts = countByGate(result.violations);
   const lines: string[] = [
+    '<!-- ai-review-gate-report -->',
+    '',
     '# AI Review Gate 리포트',
     '',
-    `**위험도:** ${result.riskLevel}`,
+    `**위험도:** ${result.overallRisk}`,
     `**머지 차단 필요:** ${result.shouldBlockMerge ? '예' : '아니오'}`,
     '',
     '## 요약',
@@ -44,43 +65,53 @@ export const renderReviewReport = (result: ReviewResult): string => {
     '',
     '| 심각도 | 개수 |',
     '|---|---:|',
-    ...severityOrder.map((severity) => `| ${severity} | ${counts[severity]} |`),
+    ...severityOrder.map((severity) => `| ${severity} | ${severityCounts[severity]} |`),
     '',
-    '## 지적 사항',
+    '## Gate별 위반 수',
+    '',
+    '| Gate | 개수 |',
+    '|---|---:|',
+    ...gateOrder.map((gate) => `| ${gate} | ${gateCounts[gate]} |`),
+    '',
+    '## 규칙 위반 표',
+    '',
+    '| Rule | Severity | Gate | Confidence | File |',
+    '|---|---|---|---|---|',
+    ...result.violations.map(
+      (violation) =>
+        `| ${escapeTableCell(violation.ruleId)} | ${violation.severity} | ${violation.gate} | ${violation.confidence} | ${escapeTableCell(
+          violation.file,
+        )} |`,
+    ),
+    '',
+    '## 상세 위반',
     '',
   ];
 
-  for (const severity of severityOrder) {
-    const findings = result.findings.filter((finding) => finding.severity === severity);
-
-    if (findings.length === 0) {
-      continue;
-    }
-
-    lines.push(`### ${severity}`, '');
-
-    findings.forEach((finding, index) => {
-      lines.push(
-        `#### ${index + 1}. ${finding.category}`,
-        '',
-        `- **파일:** \`${finding.file}\``,
-        `- **라인 힌트:** ${finding.lineHint}`,
-        `- **문제:** ${finding.problem}`,
-        `- **제안:** ${finding.suggestion}`,
-        `- **관련 규칙:** ${finding.relatedRule}`,
-        '',
-      );
-    });
+  for (const violation of result.violations) {
+    lines.push(
+      `### ${violation.ruleId} — ${violation.ruleTitle}`,
+      '',
+      `- **Severity:** ${violation.severity}`,
+      `- **Gate:** ${violation.gate}`,
+      `- **Confidence:** ${violation.confidence}`,
+      `- **File:** \`${violation.file}\``,
+      `- **Line hint:** ${violation.lineHint}`,
+      `- **Evidence:** ${violation.evidence}`,
+      `- **Problem:** ${violation.problem}`,
+      `- **Suggestion:** ${violation.suggestion}`,
+      '',
+    );
   }
 
-  if (result.findings.length === 0) {
-    lines.push('보고된 지적 사항이 없습니다.', '');
+  if (result.violations.length === 0) {
+    lines.push('보고된 규칙 위반이 없습니다.', '');
   }
 
   lines.push(
     '---',
     '',
-    '이 리포트는 보조 검토 자료이며, 최종 승인은 사람이 책임집니다.',
+    '이 리포트는 자동화된 보조 검토 자료이며, 최종 승인은 사람이 책임집니다.',
     '',
   );
 

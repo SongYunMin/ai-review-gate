@@ -1,7 +1,7 @@
 {
   "name": "ai-review-gate",
   "version": "1.0.0",
-  "description": "AGENTS.md 기반 AI Review Gate 데모",
+  "description": "AGENTS.md Review Contract 기반 AI Review Gate 데모",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",

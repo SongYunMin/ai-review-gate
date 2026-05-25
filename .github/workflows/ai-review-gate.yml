@@ -28,16 +28,55 @@ jobs:
       - name: 의존성 설치
         run: npm ci
 
-      # 공개 fork PR에는 저장소 secret이 전달되지 않으므로, 운영 적용 시 별도의 secret 처리 설계가 필요합니다.
+      - name: build/test 결과를 CI context로 저장
+        run: |
+          mkdir -p reports
+          {
+            echo "# CI Context"
+            echo
+            echo "이 파일은 AI Review Gate가 참고할 build/test 출력입니다."
+            echo
+          } > reports/ci-context.md
+
+          set +e
+
+          {
+            echo "## npm run build"
+            echo
+            echo '```text'
+          } >> reports/ci-context.md
+          npm run build >> reports/ci-context.md 2>&1
+          BUILD_EXIT=$?
+          {
+            echo '```'
+            echo
+            echo "Exit code: ${BUILD_EXIT}"
+            echo
+            echo "## npm test"
+            echo
+            echo '```text'
+          } >> reports/ci-context.md
+          npm test >> reports/ci-context.md 2>&1
+          TEST_EXIT=$?
+          {
+            echo '```'
+            echo
+            echo "Exit code: ${TEST_EXIT}"
+          } >> reports/ci-context.md
+
+          exit 0
+
+      # pull_request를 유지합니다. 공개 fork PR에는 저장소 secret이 전달되지 않으므로 별도 secret 처리 설계가 필요합니다.
       - name: AI Review Gate 실행
         id: ai_review
         continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+          AI_REVIEW_ENFORCE: ${{ vars.AI_REVIEW_ENFORCE || '0' }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: npm run ai-review:ci
+        run: npm run ai-review:ci -- --ci-context-file reports/ci-context.md
 
       - name: 리포트 파일 보장
         if: always()
@@ -45,13 +84,15 @@ jobs:
           mkdir -p reports
           if [ ! -f reports/review-report.md ]; then
             {
+              echo "<!-- ai-review-gate-report -->"
+              echo
               echo "# AI Review Gate 리포트"
               echo
               echo "AI Review Gate가 리포트를 생성하지 못했습니다. 워크플로 로그를 확인하세요."
               echo
               echo "---"
               echo
-              echo "이 리포트는 보조 검토 자료이며, 최종 승인은 사람이 책임집니다."
+              echo "이 리포트는 자동화된 보조 검토 자료이며, 최종 승인은 사람이 책임집니다."
             } > reports/review-report.md
           fi
 
@@ -62,12 +103,20 @@ jobs:
           name: ai-review-gate-reports
           path: reports/
 
-      - name: PR에 리포트 코멘트 작성
+      - name: PR 리포트 코멘트 생성 또는 업데이트
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR_NUMBER" --body-file reports/review-report.md
+        run: |
+          COMMENTS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments")
+          COMMENT_ID=$(echo "$COMMENTS" | jq -r '.[] | select(.user.type == "Bot" and (.body | contains("<!-- ai-review-gate-report -->"))) | .id' | head -n 1)
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" -F body=@reports/review-report.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file reports/review-report.md
+          fi
 
       - name: 리뷰 명령 실패 시 워크플로 실패 처리
         if: steps.ai_review.outcome == 'failure'
