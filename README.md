@@ -2,11 +2,19 @@
 
 이 저장소는 작은 Node.js TypeScript Express REST API 데모와 함께, 팀 컨벤션 문서인 `AGENTS.md`를 실행 가능한 Review Contract로 바꾸는 흐름을 보여줍니다.
 
-이 프로젝트는 Copilot Review나 CodeRabbit을 대체하려는 도구가 아닙니다.
-그 도구들은 범용 AI 리뷰어로 강력하고 instruction 파일도 읽을 수 있습니다.
+## Why not just use Copilot Review or CodeRabbit?
 
-이 데모의 초점은 더 좁습니다.
-팀 규칙을 안정적인 rule ID, severity, gate action, evidence, suggestion이 있는 계약으로 만들고, 로컬 개발자와 GitHub Actions가 같은 기준으로 실행하게 하는 것입니다.
+Copilot Review와 CodeRabbit은 범용 AI 리뷰어로 강력합니다.
+일부 도구는 instruction 파일이나 AGENTS.md 계열 guideline도 읽을 수 있고, PR마다 자동으로 리뷰를 실행할 수 있습니다.
+
+이 프로젝트는 그런 도구를 대체하려는 것이 아닙니다.
+AGENTS.md를 읽는다는 사실 자체도 더 이상 충분한 차별점이 아닙니다.
+
+차별점은 `AGENTS.md`를 단순 guideline이 아니라 `ruleId`, `severity`, `gate`, `confidence`, `evidence`, `shouldBlockMerge`를 가진 Review Contract로 만들고, GitHub Actions에서 로컬/CI 동일한 방식으로 실행한다는 점입니다.
+
+즉, 범용 AI 리뷰 도구는 “좋은 리뷰 코멘트를 생성하는 레이어”에 가깝고, AI Review Gate는 “팀 규칙을 merge decision에 연결하는 정책 실행 레이어”에 가깝습니다.
+
+이 데모의 초점은 `Review Contract as Code`, `Structured violation output`, `CI policy control`입니다.
 
 ## 해결하려는 문제
 
@@ -17,9 +25,9 @@ AI Review Gate는 다음 흐름을 데모합니다.
 
 ```text
 AGENTS.md Review Contract + PR diff + optional CI context
-  -> Structured rule-violation result
+  -> Structured violation result
   -> Markdown PR report
-  -> optional CI gate decision
+  -> optional Gate decision
 ```
 
 범용 코멘트 생성이 아니라, 팀 규칙을 기계가 읽을 수 있는 위반 결과로 변환하는 것이 핵심입니다.
@@ -70,7 +78,7 @@ Expected evidence:
 
 ## Structured Outputs를 쓰는 이유
 
-Markdown 리뷰 코멘트는 사람이 읽기 좋지만 CI가 안정적으로 판단하기 어렵습니다.
+Markdown PR comment는 사람이 읽기 좋지만 CI가 안정적으로 판단하기 어렵습니다.
 이 프로젝트는 먼저 Zod `ReviewResultSchema`로 검증되는 JSON을 생성합니다.
 
 핵심 출력은 `findings`가 아니라 `violations`입니다.
@@ -104,13 +112,13 @@ npm run build
 npm test
 ```
 
-현재 로컬 diff를 리뷰:
+현재 로컬 diff의 Review Contract violation 판정:
 
 ```bash
 npm run ai-review
 ```
 
-패치 파일을 리뷰:
+패치 파일의 Review Contract violation 판정:
 
 ```bash
 npm run ai-review -- --diff-file demo/bad-change.patch
@@ -185,7 +193,7 @@ scripts/ai-review.ts
   -> reports/review-result.json 저장
 
 scripts/render-review-report.ts
-  -> 구조화 JSON을 Markdown PR report로 렌더링
+  -> structured violation result를 Markdown PR report로 렌더링
 
 schemas/review-result.schema.ts
   -> rule violation 중심 Structured Output 스키마

@@ -5,7 +5,12 @@ import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { ReviewResultSchema, type ReviewResult, severityOrder } from '../schemas/review-result.schema';
 import { formatRulesForPrompt, parseReviewContract, type ReviewRule } from './parse-review-contract';
-import { defaultReviewReportPath, defaultReviewResultPath, writeReviewReport } from './render-review-report';
+import {
+  defaultReviewReportPath,
+  defaultReviewResultPath,
+  resolveGateDecision,
+  writeReviewReport,
+} from './render-review-report';
 
 type CliOptions = {
   diffFile?: string;
@@ -64,7 +69,7 @@ const runGit = (args: string[]): string =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-// 로컬에서는 현재 diff를, CI에서는 PR base/head 차이를 읽어 리뷰 입력으로 사용합니다.
+// 로컬에서는 현재 diff를, CI에서는 PR base/head 차이를 Review Contract violation 판정 입력으로 사용합니다.
 const readDiff = async (options: CliOptions): Promise<string> => {
   if (options.diffFile) {
     return readFile(options.diffFile, 'utf8');
@@ -94,7 +99,7 @@ const readOptionalCiContext = async (options: CliOptions): Promise<string | unde
   return readFile(options.ciContextFile, 'utf8');
 };
 
-// 원문 컨벤션과 파싱된 계약을 함께 제공해 모델이 임의 리뷰가 아니라 rule ID 평가를 수행하게 합니다.
+// 원문 컨벤션과 파싱된 계약을 함께 제공해 모델이 임의 코멘트가 아니라 rule ID 평가를 수행하게 합니다.
 const buildReviewPrompt = (
   agentsMd: string,
   reviewRules: ReviewRule[],
@@ -144,7 +149,7 @@ const requestReviewFromModel = async (
   // 실제 호출 모드는 Gemini OpenAI-compatible API를 OpenAI SDK로 호출하는 예시입니다.
   if (!process.env.GEMINI_API_KEY) {
     throw new Error(
-      'GEMINI_API_KEY가 없습니다. 실제 리뷰 모드에서는 값을 설정하고, 백업 데모에서는 AI_REVIEW_MOCK=1로 실행하세요.',
+      'GEMINI_API_KEY가 없습니다. 실제 violation 판정 모드에서는 값을 설정하고, 백업 데모에서는 AI_REVIEW_MOCK=1로 실행하세요.',
     );
   }
 
@@ -168,14 +173,14 @@ const requestReviewFromModel = async (
   const parsedResult = completion.choices[0]?.message.parsed;
 
   if (!parsedResult) {
-    throw new Error('모델이 구조화된 리뷰 결과를 반환하지 않았습니다.');
+    throw new Error('모델이 structured violation result를 반환하지 않았습니다.');
   }
 
   return ReviewResultSchema.parse(parsedResult);
 };
 
 const printSummary = (result: ReviewResult): void => {
-  // CI 로그에서 빠르게 상태를 읽을 수 있도록 Markdown과 별도로 한 줄 요약을 남깁니다.
+  // CI 로그에서 빠르게 Gate decision과 구조화된 violation 수를 읽을 수 있도록 한 줄 요약을 남깁니다.
   const counts = severityOrder.map((severity) => {
     const count = result.violations.filter((violation) => violation.severity === severity).length;
     return `${severity}=${count}`;
@@ -184,15 +189,15 @@ const printSummary = (result: ReviewResult): void => {
   console.log(
     [
       `위험도: ${result.overallRisk}`,
-      `머지 차단 필요: ${result.shouldBlockMerge ? '예' : '아니오'}`,
-      `규칙 위반: ${result.violations.length}`,
+      `Gate decision: ${resolveGateDecision(result)}`,
+      `structured violation result: ${result.violations.length}`,
       counts.join(', '),
     ].join(' | '),
   );
 };
 
 const main = async (): Promise<void> => {
-  // 전체 흐름: diff 수집 -> AI/목업 리뷰 -> JSON 저장 -> 한국어 Markdown 리포트 렌더링.
+  // 전체 흐름: diff 수집 -> AI/목업 violation 판정 -> JSON 저장 -> 한국어 Markdown 리포트 렌더링.
   const options = parseArgs(process.argv.slice(2));
   const agentsMd = await readFile('AGENTS.md', 'utf8');
   const reviewRules = parseReviewContract(agentsMd);
@@ -200,7 +205,7 @@ const main = async (): Promise<void> => {
   const ciContext = await readOptionalCiContext(options);
 
   if (!diff.trim()) {
-    throw new Error('리뷰할 diff가 없습니다. --diff-file을 전달하거나 로컬 변경을 만들거나 stage 하세요.');
+    throw new Error('Review Contract violation을 판정할 diff가 없습니다. --diff-file을 전달하거나 로컬 변경을 만들거나 stage 하세요.');
   }
 
   const result =
@@ -210,13 +215,16 @@ const main = async (): Promise<void> => {
 
   await mkdir(path.dirname(defaultReviewResultPath), { recursive: true });
   await writeFile(defaultReviewResultPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-  await writeReviewReport(result, defaultReviewReportPath);
+  await writeReviewReport(result, defaultReviewReportPath, {
+    enforce: process.env.AI_REVIEW_ENFORCE === '1',
+    ciContext,
+  });
   printSummary(result);
   console.log(`저장 완료: ${defaultReviewResultPath}`);
   console.log(`저장 완료: ${defaultReviewReportPath}`);
 
   if (process.env.AI_REVIEW_ENFORCE === '1' && result.shouldBlockMerge) {
-    throw new Error('AI_REVIEW_ENFORCE=1이며 Review Gate가 머지 차단을 권고했습니다.');
+    throw new Error('AI_REVIEW_ENFORCE=1이며 Review Gate decision이 BLOCKED입니다.');
   }
 };
 
