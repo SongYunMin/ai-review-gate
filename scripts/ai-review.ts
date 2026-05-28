@@ -4,10 +4,17 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { ReviewResultSchema, type ReviewResult, severityOrder } from '../schemas/review-result.schema';
-import { defaultReviewReportPath, defaultReviewResultPath, writeReviewReport } from './render-review-report';
+import { formatRulesForPrompt, parseReviewContract, type ReviewRule } from './parse-review-contract';
+import {
+  defaultReviewReportPath,
+  defaultReviewResultPath,
+  resolveGateDecision,
+  writeReviewReport,
+} from './render-review-report';
 
 type CliOptions = {
   diffFile?: string;
+  ciContextFile?: string;
   ci: boolean;
 };
 
@@ -38,6 +45,18 @@ const parseArgs = (argv: string[]): CliOptions => {
       continue;
     }
 
+    if (arg === '--ci-context-file') {
+      const ciContextFile = argv[index + 1];
+
+      if (!ciContextFile) {
+        throw new Error('--ci-context-file 옵션에는 파일 경로가 필요합니다.');
+      }
+
+      options.ciContextFile = ciContextFile;
+      index += 1;
+      continue;
+    }
+
     throw new Error(`알 수 없는 인자입니다: ${arg}`);
   }
 
@@ -50,7 +69,7 @@ const runGit = (args: string[]): string =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-// 로컬에서는 현재 diff를, CI에서는 PR base/head 차이를 읽어 리뷰 입력으로 사용합니다.
+// 로컬에서는 현재 diff를, CI에서는 PR base/head 차이를 Review Contract violation 판정 입력으로 사용합니다.
 const readDiff = async (options: CliOptions): Promise<string> => {
   if (options.diffFile) {
     return readFile(options.diffFile, 'utf8');
@@ -72,19 +91,46 @@ const readDiff = async (options: CliOptions): Promise<string> => {
   return [unstagedDiff, stagedDiff].filter(Boolean).join('\n');
 };
 
-// AGENTS.md와 실제 diff를 한 프롬프트에 묶어 모델이 팀 규칙 기준으로만 판단하게 합니다.
-const buildReviewPrompt = (agentsMd: string, diff: string): string => [
-  '이 PR diff를 팀 컨벤션 기준으로 리뷰하세요.',
+const readOptionalCiContext = async (options: CliOptions): Promise<string | undefined> => {
+  if (!options.ciContextFile) {
+    return undefined;
+  }
+
+  return readFile(options.ciContextFile, 'utf8');
+};
+
+// 원문 컨벤션과 파싱된 계약을 함께 제공해 모델이 임의 코멘트가 아니라 rule ID 평가를 수행하게 합니다.
+const buildReviewPrompt = (
+  agentsMd: string,
+  reviewRules: ReviewRule[],
+  diff: string,
+  ciContext?: string,
+): string => [
+  '이 PR diff를 Review Contract 기준으로 평가하세요.',
   '',
   '## AGENTS.md',
   '',
   agentsMd,
+  '',
+  '## Parsed Review Contract',
+  '',
+  formatRulesForPrompt(reviewRules),
   '',
   '## Pull Request Diff',
   '',
   '```diff',
   diff,
   '```',
+  ...(ciContext
+    ? [
+        '',
+        '## Optional CI Context',
+        '',
+        '```text',
+        ciContext,
+        '```',
+      ]
+    : []),
 ].join('\n');
 
 const readMockReviewResult = async (): Promise<ReviewResult> => {
@@ -94,11 +140,16 @@ const readMockReviewResult = async (): Promise<ReviewResult> => {
   return ReviewResultSchema.parse(JSON.parse(rawMock));
 };
 
-const requestReviewFromModel = async (agentsMd: string, diff: string): Promise<ReviewResult> => {
+const requestReviewFromModel = async (
+  agentsMd: string,
+  reviewRules: ReviewRule[],
+  diff: string,
+  ciContext?: string,
+): Promise<ReviewResult> => {
   // 실제 호출 모드는 Gemini OpenAI-compatible API를 OpenAI SDK로 호출하는 예시입니다.
   if (!process.env.GEMINI_API_KEY) {
     throw new Error(
-      'GEMINI_API_KEY가 없습니다. 실제 리뷰 모드에서는 값을 설정하고, 백업 데모에서는 AI_REVIEW_MOCK=1로 실행하세요.',
+      'GEMINI_API_KEY가 없습니다. 실제 violation 판정 모드에서는 값을 설정하고, 백업 데모에서는 AI_REVIEW_MOCK=1로 실행하세요.',
     );
   }
 
@@ -113,7 +164,7 @@ const requestReviewFromModel = async (agentsMd: string, diff: string): Promise<R
     model,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: buildReviewPrompt(agentsMd, diff) },
+      { role: 'user', content: buildReviewPrompt(agentsMd, reviewRules, diff, ciContext) },
     ],
     // Gemini OpenAI 호환 API에서도 Zod 기반 JSON Schema 출력을 강제합니다.
     response_format: zodResponseFormat(ReviewResultSchema, 'review_result'),
@@ -122,50 +173,59 @@ const requestReviewFromModel = async (agentsMd: string, diff: string): Promise<R
   const parsedResult = completion.choices[0]?.message.parsed;
 
   if (!parsedResult) {
-    throw new Error('모델이 구조화된 리뷰 결과를 반환하지 않았습니다.');
+    throw new Error('모델이 structured violation result를 반환하지 않았습니다.');
   }
 
   return ReviewResultSchema.parse(parsedResult);
 };
 
 const printSummary = (result: ReviewResult): void => {
-  // CI 로그에서 빠르게 상태를 읽을 수 있도록 Markdown과 별도로 한 줄 요약을 남깁니다.
+  // CI 로그에서 빠르게 Gate decision과 구조화된 violation 수를 읽을 수 있도록 한 줄 요약을 남깁니다.
   const counts = severityOrder.map((severity) => {
-    const count = result.findings.filter((finding) => finding.severity === severity).length;
+    const count = result.violations.filter((violation) => violation.severity === severity).length;
     return `${severity}=${count}`;
   });
 
   console.log(
     [
-      `위험도: ${result.riskLevel}`,
-      `머지 차단 필요: ${result.shouldBlockMerge ? '예' : '아니오'}`,
-      `지적 사항: ${result.findings.length}`,
+      `위험도: ${result.overallRisk}`,
+      `Gate decision: ${resolveGateDecision(result)}`,
+      `structured violation result: ${result.violations.length}`,
       counts.join(', '),
     ].join(' | '),
   );
 };
 
 const main = async (): Promise<void> => {
-  // 전체 흐름: diff 수집 -> AI/목업 리뷰 -> JSON 저장 -> 한국어 Markdown 리포트 렌더링.
+  // 전체 흐름: diff 수집 -> AI/목업 violation 판정 -> JSON 저장 -> 한국어 Markdown 리포트 렌더링.
   const options = parseArgs(process.argv.slice(2));
   const agentsMd = await readFile('AGENTS.md', 'utf8');
+  const reviewRules = parseReviewContract(agentsMd);
   const diff = await readDiff(options);
+  const ciContext = await readOptionalCiContext(options);
 
   if (!diff.trim()) {
-    throw new Error('리뷰할 diff가 없습니다. --diff-file을 전달하거나 로컬 변경을 만들거나 stage 하세요.');
+    throw new Error('Review Contract violation을 판정할 diff가 없습니다. --diff-file을 전달하거나 로컬 변경을 만들거나 stage 하세요.');
   }
 
   const result =
     process.env.AI_REVIEW_MOCK === '1'
       ? await readMockReviewResult()
-      : await requestReviewFromModel(agentsMd, diff);
+      : await requestReviewFromModel(agentsMd, reviewRules, diff, ciContext);
 
   await mkdir(path.dirname(defaultReviewResultPath), { recursive: true });
   await writeFile(defaultReviewResultPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
-  await writeReviewReport(result, defaultReviewReportPath);
+  await writeReviewReport(result, defaultReviewReportPath, {
+    enforce: process.env.AI_REVIEW_ENFORCE === '1',
+    ciContext,
+  });
   printSummary(result);
   console.log(`저장 완료: ${defaultReviewResultPath}`);
   console.log(`저장 완료: ${defaultReviewReportPath}`);
+
+  if (process.env.AI_REVIEW_ENFORCE === '1' && result.shouldBlockMerge) {
+    throw new Error('AI_REVIEW_ENFORCE=1이며 Review Gate decision이 BLOCKED입니다.');
+  }
 };
 
 main().catch((error: unknown) => {

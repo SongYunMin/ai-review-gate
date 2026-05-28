@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { ZodError } from 'zod';
-import { completeLesson } from './controllers/lessonProgressController';
+import { completeLesson, getLessonCompletions } from './controllers/lessonProgressController';
 import { AppError } from './errors/AppError';
 
 export const app = express();
@@ -8,6 +8,7 @@ export const app = express();
 app.use(express.json());
 
 // 데모 API의 단일 진입점입니다. 컨트롤러가 요청 파싱을 맡고 실제 완료 흐름은 서비스로 위임합니다.
+app.get('/api/lessons/:lessonId/completions', getLessonCompletions);
 app.post('/api/lessons/:lessonId/complete', completeLesson);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

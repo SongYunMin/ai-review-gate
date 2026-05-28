@@ -33,6 +33,11 @@ export class LessonProgressRepository {
     );
   }
 
+  findCompletionsByLesson(lessonId: string): LessonProgress[] {
+    // 데모 운영자가 특정 강의의 완료 현황을 빠르게 확인할 수 있도록 강의 기준으로 조회합니다.
+    return this.database.lessonProgress.filter((progress) => progress.lessonId === lessonId);
+  }
+
   createCompletion(input: CreateLessonCompletionInput): LessonProgress {
     // 실제 서비스라면 INSERT에 해당하는 지점이며, 데모에서는 배열에 row를 추가합니다.
     const progress: LessonProgress = {

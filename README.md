@@ -1,98 +1,200 @@
-# Vibe Coding에서 Verify Coding으로: AGENTS.md 기반 AI Review Gate 만들기
+# AI Review Gate: AGENTS.md를 실행 가능한 Review Contract로 만들기
 
-이 데모는 백엔드 팀이 로컬과 CI에서 실행할 수 있는 AI Review Gate를 보여줍니다. `AGENTS.md`를 팀 컨벤션의 기준 파일로 읽고, PR diff를 그 기준에 맞춰 리뷰한 뒤, 구조화된 JSON 결과를 받아 Markdown 리포트로 렌더링하고 GitHub PR에 요약 코멘트를 남깁니다.
+이 저장소는 작은 Node.js TypeScript Express REST API 데모와 함께, 팀 컨벤션 문서인 `AGENTS.md`를 실행 가능한 Review Contract로 바꾸는 흐름을 보여줍니다.
 
-## 이 프로젝트가 보여주는 것
+## Why not just use Copilot Review or CodeRabbit?
 
-- 간단한 Express REST API: `POST /api/lessons/:lessonId/complete`
-- `git diff` 또는 `demo/bad-change.patch`를 읽을 수 있는 로컬 리뷰 명령
-- Gemini API를 호출하지 않아도 발표에서 안전하게 사용할 수 있는 목업 모드
-- Gemini OpenAI-compatible API, OpenAI JavaScript SDK, Zod 스키마를 사용한 Structured Outputs
-- `reports/review-report.md`를 PR에 코멘트로 남기는 GitHub Actions 자동화
+Copilot Review와 CodeRabbit은 범용 AI 리뷰어로 강력합니다.
+일부 도구는 instruction 파일이나 AGENTS.md 계열 guideline도 읽을 수 있고, PR마다 자동으로 리뷰를 실행할 수 있습니다.
 
-## 아키텍처
+이 프로젝트는 그런 도구를 대체하려는 것이 아닙니다.
+AGENTS.md를 읽는다는 사실 자체도 더 이상 충분한 차별점이 아닙니다.
+
+차별점은 `AGENTS.md`를 단순 guideline이 아니라 `ruleId`, `severity`, `gate`, `confidence`, `evidence`, `shouldBlockMerge`를 가진 Review Contract로 만들고, GitHub Actions에서 로컬/CI 동일한 방식으로 실행한다는 점입니다.
+
+즉, 범용 AI 리뷰 도구는 “좋은 리뷰 코멘트를 생성하는 레이어”에 가깝고, AI Review Gate는 “팀 규칙을 merge decision에 연결하는 정책 실행 레이어”에 가깝습니다.
+
+이 데모의 초점은 `Review Contract as Code`, `Structured violation output`, `CI policy control`입니다.
+
+## 해결하려는 문제
+
+팀 컨벤션은 보통 문서로 끝나기 쉽습니다.
+리뷰어가 매번 기억해서 적용해야 하고, CI는 그 의미를 직접 읽지 못합니다.
+
+AI Review Gate는 다음 흐름을 데모합니다.
 
 ```text
-개발자 또는 GitHub Actions
-  -> scripts/ai-review.ts
-      -> AGENTS.md 읽기
-      -> git diff 또는 demo/bad-change.patch 읽기
-      -> Gemini OpenAI-compatible API 또는 목업 결과 호출
-      -> ReviewResultSchema 검증
-      -> reports/review-result.json 저장
-      -> scripts/render-review-report.ts 호출
-          -> reports/review-report.md 저장
+AGENTS.md Review Contract + PR diff + optional CI context
+  -> Structured violation result
+  -> Markdown PR report
+  -> optional Gate decision
 ```
 
-```text
-REST API 데모
-  app.ts
-    -> lessonProgressController.ts
-        -> lessonProgressService.ts
-            -> lessonProgressRepository.ts
-            -> courseProgressRepository.ts
+범용 코멘트 생성이 아니라, 팀 규칙을 기계가 읽을 수 있는 위반 결과로 변환하는 것이 핵심입니다.
+
+## 데모 API
+
+REST API 데모는 에듀테크 강의 완료 흐름을 다룹니다.
+
+- `POST /api/lessons/:lessonId/complete`
+- controller, service, repository 계층 분리
+- 사용자 수강 등록 여부 확인
+- 중복 완료 요청의 멱등 처리
+- 테스트를 통한 실패 경로 검증
+
+## Review Contract 형식
+
+`AGENTS.md`에는 사람이 읽는 컨벤션과 함께 `## Review Contract` 섹션이 있습니다.
+각 규칙은 단순한 Markdown 패턴으로 작성되어 `scripts/parse-review-contract.ts`가 파싱합니다.
+
+```md
+### R-AUTH-001: Ownership or enrollment validation is required
+
+Severity: CRITICAL
+Gate: error
+Applies to:
+- src/controllers/**
+- src/services/**
+
+Rule:
+사용자별 학습 진도를 읽거나 쓰는 API는 데이터 접근 또는 변경 전에 소유권이나 코스 수강 등록 여부를 검증해야 합니다.
+
+Violation examples:
+- lessonId만으로 강의를 완료하면서 인증 사용자의 코스 수강 여부를 확인하지 않습니다.
+
+Expected evidence:
+- 변경된 API 경로 또는 service 메서드
+- 누락된 소유권 또는 수강 등록 검증
 ```
 
-## AGENTS.md 사용 방식
+현재 포함된 규칙:
 
-`scripts/ai-review.ts`는 실행할 때마다 `AGENTS.md`를 읽고 PR diff와 함께 모델 입력에 포함합니다. 모델은 해당 컨벤션을 기준으로만 리뷰하도록 지시받으며, 각 지적 사항에는 관련된 `AGENTS.md` 규칙을 함께 적어야 합니다.
+- `R-ARCH-001`: 컨트롤러는 얇게 유지
+- `R-AUTH-001`: 소유권 또는 수강 등록 검증
+- `R-TX-001`: 여러 쓰기 작업의 트랜잭션 또는 원자적 경계
+- `R-IDEMP-001`: 재시도 가능한 쓰기 API의 멱등성
+- `R-ERR-001`: 내부 오류 메시지 노출 금지
+- `R-TEST-001`: critical write API의 실패 경로 테스트
 
-## Markdown 전에 Structured Outputs를 쓰는 이유
+## Structured Outputs를 쓰는 이유
 
-사람은 Markdown을 읽지만, 자동화에는 안정적인 데이터 구조가 필요합니다. Review Gate는 먼저 `ReviewResultSchema`로 검증된 `reports/review-result.json`을 저장한 뒤, 그 JSON을 `reports/review-report.md`로 렌더링합니다. 이렇게 하면 CI에서 심각도별 개수를 세거나, 향후 차단 규칙을 판단하거나, 기계가 읽을 수 있는 산출물을 보존할 수 있습니다.
+Markdown PR comment는 사람이 읽기 좋지만 CI가 안정적으로 판단하기 어렵습니다.
+이 프로젝트는 먼저 Zod `ReviewResultSchema`로 검증되는 JSON을 생성합니다.
 
-## 로컬 데모
+핵심 출력은 `findings`가 아니라 `violations`입니다.
+
+```json
+{
+  "overallRisk": "CRITICAL",
+  "shouldBlockMerge": true,
+  "violations": [
+    {
+      "ruleId": "R-AUTH-001",
+      "severity": "CRITICAL",
+      "gate": "error",
+      "confidence": "HIGH",
+      "evidence": "diff에 근거한 구체 증거",
+      "suggestion": "수정 제안"
+    }
+  ]
+}
+```
+
+`shouldBlockMerge`는 `gate = "error"`이고 confidence가 `MEDIUM` 또는 `HIGH`인 실제 위반이 있을 때만 `true`가 됩니다.
+
+## 로컬 사용
+
+의존성 설치와 기본 검증:
 
 ```bash
 npm install
+npm run build
 npm test
+```
+
+현재 로컬 diff의 Review Contract violation 판정:
+
+```bash
+npm run ai-review
+```
+
+패치 파일의 Review Contract violation 판정:
+
+```bash
 npm run ai-review -- --diff-file demo/bad-change.patch
 ```
 
-실제 Gemini API 호출 모드로 실행하려면 다음 환경 변수를 설정합니다.
+실제 Gemini OpenAI-compatible API 호출에는 `GEMINI_API_KEY`가 필요합니다.
 
 ```bash
 export GEMINI_API_KEY=...
 export GEMINI_MODEL=gemini-3-flash-preview
+npm run ai-review -- --diff-file demo/bad-change.patch
 ```
 
-`GEMINI_MODEL`은 선택값이며 기본값은 `gemini-3-flash-preview`입니다.
+## Mock 사용
 
-## 목업 데모
-
-네트워크, quota, API key 리스크 없이 발표해야 할 때는 목업 모드를 사용합니다. 이 경로는 실제 Gemini API를 호출하지 않으므로 발표 백업용으로 적합합니다.
+발표나 오프라인 데모에서는 mock 모드를 사용합니다.
+이 모드는 API key, 네트워크, quota에 의존하지 않고 같은 JSON 검증과 Markdown 렌더링 경로를 실행합니다.
 
 ```bash
 AI_REVIEW_MOCK=1 npm run ai-review -- --diff-file demo/bad-change.patch
 ```
 
-이 명령은 `demo/mock-review-result.json`을 읽고 동일한 스키마로 검증한 뒤 다음 파일을 생성합니다.
+생성 파일:
 
 - `reports/review-result.json`
 - `reports/review-report.md`
 
-## GitHub Actions 모드
+enforce 동작은 환경 변수로 확인할 수 있습니다.
 
-`.github/workflows/ai-review-gate.yml`은 PR이 `opened`, `synchronize`, `reopened` 상태가 될 때 실행됩니다. 전체 git history를 checkout하고, Node.js 22 의존성을 설치한 뒤, PR base/head SHA를 비교해서 `npm run ai-review:ci`를 실행합니다. 이후 생성된 리포트를 산출물로 업로드하고 `reports/review-report.md`를 PR에 코멘트로 남깁니다.
+```bash
+AI_REVIEW_MOCK=1 AI_REVIEW_ENFORCE=1 npm run ai-review -- --diff-file demo/bad-change.patch
+```
 
-워크플로는 의도적으로 `pull_request_target`이 아니라 `pull_request`를 사용합니다. 공개 fork PR에서 실제 Gemini 호출을 허용하려면 별도의 secret 처리 설계가 필요합니다.
+## CI 사용
 
-## 범용 PR 리뷰 도구와의 차이
+GitHub Actions 워크플로우는 `pull_request`의 `opened`, `synchronize`, `reopened`에서 실행됩니다.
+보안상 `pull_request_target`을 사용하지 않습니다.
 
-이 프로젝트는 Copilot Review나 CodeRabbit을 대체하기 위한 것이 아닙니다. 목표는 더 좁습니다. 팀이 소유한 `AGENTS.md` 컨벤션을 로컬과 CI에서 반복 실행 가능한 Review Gate로 바꾸는 것입니다. 팀은 스키마, 심각도 category, 프롬프트, 리포트 렌더러, 향후 차단 정책을 직접 제어합니다.
+CI 흐름:
 
-## 알려진 한계와 안전한 도입 계획
+1. `npm ci`
+2. `npm run build`와 `npm test` 출력을 `reports/ci-context.md`에 저장
+3. `npm run ai-review:ci -- --ci-context-file reports/ci-context.md`
+4. `reports/` artifact 업로드
+5. 숨김 마커 `<!-- ai-review-gate-report -->`가 있는 기존 bot comment를 업데이트하거나 새로 작성
 
-알려진 한계:
+기본값은 comment/report only입니다.
+`AI_REVIEW_ENFORCE=1`일 때만 `shouldBlockMerge === true` 결과가 워크플로우 실패로 이어집니다.
 
-- 이 데모는 실제 데이터베이스가 아니라 인메모리 repository를 사용합니다.
-- AI 결과는 보조 검토 성격이며, 이슈를 놓치거나 오탐을 만들 수 있습니다.
-- 워크플로는 하나의 요약 코멘트만 남기며 라인 단위 리뷰 코멘트는 생성하지 않습니다.
-- 현재 CI 흐름은 코멘트 전용이며, `shouldBlockMerge` 값만으로 실패 처리하지 않습니다.
+공개 fork PR에는 저장소 secret이 전달되지 않습니다.
+실제 운영에서 외부 PR까지 지원하려면 별도의 secret 처리와 신뢰 경계 설계가 필요합니다.
 
-안전한 도입 순서:
+## 안전한 도입 계획
 
-1. 코멘트 전용으로 시작합니다.
-2. `HIGH`는 경고로 표시합니다.
+1. comment only로 시작합니다.
+2. `HIGH`는 warning으로만 표시합니다.
 3. `CRITICAL`만 실패 처리합니다.
-4. 팀이 승인한 차단 규칙만 적용합니다.
+4. 팀 합의가 끝난 rule ID만 선택적으로 fail 대상으로 올립니다.
+
+## 프로젝트 구조
+
+```text
+AGENTS.md
+  -> 사람이 읽는 팀 컨벤션
+  -> Review Contract rule ID와 gate policy
+
+scripts/parse-review-contract.ts
+  -> AGENTS.md Review Contract 파싱
+
+scripts/ai-review.ts
+  -> diff, contract, optional CI context를 모델 또는 mock에 전달
+  -> reports/review-result.json 저장
+
+scripts/render-review-report.ts
+  -> structured violation result를 Markdown PR report로 렌더링
+
+schemas/review-result.schema.ts
+  -> rule violation 중심 Structured Output 스키마
+```
