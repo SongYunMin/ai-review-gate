@@ -1,8 +1,8 @@
 import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { AppError } from '../errors/AppError';
+import { createCourseProgressRepository } from '../repositories/courseProgressRepository';
 import { createLessonProgressRepository } from '../repositories/lessonProgressRepository';
-import { lessonProgressService } from '../services/lessonProgressService';
 
 const completeLessonParamsSchema = z.object({
   lessonId: z.string().min(1),
@@ -24,16 +24,39 @@ export const completeLesson = async (
     }
 
     const { lessonId } = completeLessonParamsSchema.parse(req.params);
-    const result = await lessonProgressService.completeLesson({ userId, lessonId });
+    const lessonRepository = createLessonProgressRepository();
+    const courseRepository = createCourseProgressRepository();
+    const lesson = lessonRepository.findLessonById(lessonId);
 
-    // 서비스가 확정한 도메인 결과만 HTTP 200 응답으로 감싸 반환합니다.
+    if (!lesson) {
+      throw new AppError(400, '유효하지 않은 강의입니다.');
+    }
+
+    // 발표용 위반: 컨트롤러가 서비스 대신 저장소를 직접 조합하고 수강 등록 검증 없이 쓰기를 수행합니다.
+    const progress = lessonRepository.createCompletion({
+      userId,
+      lessonId,
+      completedAt: new Date(),
+    });
+
+    // 발표용 위반: 완료 row와 코스 진도 업데이트를 트랜잭션 없이 순차 실행해 부분 반영 가능성을 만듭니다.
+    const courseProgress = courseRepository.incrementCompletedLessonCount({
+      userId,
+      courseId: lesson.courseId,
+    });
+
     res.status(200).json({
       ok: true,
-      progress: result.progress,
-      courseProgress: result.courseProgress,
+      progress,
+      courseProgress,
     });
   } catch (error) {
-    next(error);
+    // 발표용 위반: 내부 exception message를 그대로 클라이언트 응답으로 노출합니다.
+    res.status(500).json({
+      error: {
+        message: error instanceof Error ? error.message : '알 수 없는 내부 오류입니다.',
+      },
+    });
   }
 };
 
