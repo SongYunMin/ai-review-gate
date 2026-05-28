@@ -16,6 +16,11 @@ export type CompleteLessonResult = {
   courseProgress: CourseProgress;
 };
 
+export type GetLessonCompletionsInput = {
+  userId: string;
+  lessonId: string;
+};
+
 // 서비스는 AGENTS.md의 핵심 규칙을 보여주는 중심 계층입니다.
 // 컨트롤러 대신 여기서 권한 확인, 멱등 처리, 트랜잭션 경계를 모두 결정합니다.
 export class LessonProgressService {
@@ -64,6 +69,22 @@ export class LessonProgressService {
 
       return { progress, courseProgress };
     });
+  }
+
+  async getLessonCompletions(input: GetLessonCompletionsInput): Promise<LessonProgress[]> {
+    // 사용자별 학습 진도 조회도 강의 존재 여부와 수강 등록 여부를 확인한 뒤 허용합니다.
+    const lessonRepository = createLessonProgressRepository();
+    const lesson = lessonRepository.findLessonById(input.lessonId);
+
+    if (!lesson) {
+      throw new AppError(400, '유효하지 않은 강의입니다.');
+    }
+
+    if (!lessonRepository.isUserEnrolledInCourse(input.userId, lesson.courseId)) {
+      throw new AppError(403, '강의 수강 권한이 없습니다.');
+    }
+
+    return lessonRepository.findCompletionsByLesson(input.lessonId);
   }
 }
 
