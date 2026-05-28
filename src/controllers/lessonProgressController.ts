@@ -28,10 +28,6 @@ export const completeLesson = async (
     const courseRepository = createCourseProgressRepository();
     const lesson = lessonRepository.findLessonById(lessonId);
 
-    if (!lesson) {
-      throw new AppError(400, '유효하지 않은 강의입니다.');
-    }
-
     // 발표용 위반: 컨트롤러가 서비스 대신 저장소를 직접 조합하고 수강 등록 검증 없이 쓰기를 수행합니다.
     const progress = lessonRepository.createCompletion({
       userId,
@@ -42,7 +38,7 @@ export const completeLesson = async (
     // 발표용 위반: 완료 row와 코스 진도 업데이트를 트랜잭션 없이 순차 실행해 부분 반영 가능성을 만듭니다.
     const courseProgress = courseRepository.incrementCompletedLessonCount({
       userId,
-      courseId: lesson.courseId,
+      courseId: lesson!.courseId,
     });
 
     res.status(200).json({
