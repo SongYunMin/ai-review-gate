@@ -3,7 +3,8 @@
 ## 프로젝트 개요
 
 이 저장소는 에듀테크 강의 완료 흐름을 보여주는 작은 Node.js TypeScript REST API 데모입니다.
-AI Review Gate는 이 파일을 팀 컨벤션의 단일 기준으로 사용해야 합니다.
+AI Review Gate는 회사 공통 계약을 먼저 적용한 뒤, 이 파일을 더 좁은 프로젝트 컨벤션으로 적용해야 합니다.
+같은 rule ID가 있으면 이 파일의 프로젝트 규칙이 회사 공통 규칙을 전체 교체합니다.
 
 ## 백엔드 아키텍처 규칙
 
@@ -37,7 +38,8 @@ AI Review Gate는 이 파일을 팀 컨벤션의 단일 기준으로 사용해�
 - PR diff를 리뷰할 때는 이 파일의 규칙을 먼저 기준으로 삼아야 합니다.
 - 파일 경로와 라인 힌트가 있는 구체적인 지적 사항을 우선해야 합니다.
 - diff에 보이지 않거나 diff에서 직접 추론되지 않는 지적 사항을 만들어내면 안 됩니다.
-- 권한, 트랜잭션 무결성, 안전하지 않은 오류 노출에 영향을 주는 지적 사항은 머지 차단 후보로 취급해야 합니다.
+- 권한, 트랜잭션 무결성, 안전하지 않은 오류 노출 지적은 높은 우선순위로 사람이 확인해야 합니다.
+- `Gate: error` 규칙도 선언할 수 있지만, 동일 rule/file의 deterministic evidence가 없으면 자동 차단이 아니라 advisory finding으로 처리해야 합니다.
 
 ## Review Contract
 
@@ -97,6 +99,7 @@ Expected evidence:
 Severity: HIGH
 Gate: error
 Applies to:
+- src/controllers/**
 - src/services/**
 - src/repositories/**
 

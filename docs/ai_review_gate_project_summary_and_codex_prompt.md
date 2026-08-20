@@ -1,5 +1,7 @@
 # Vibe Coding에서 Verify Coding으로: AGENTS.md 기반 AI Review Gate
 
+> **Historical prototype document:** 이 문서는 발표용 초기 설계를 보존한 자료입니다. 아래의 workflow, event, model 기본값, 보안 지침을 현재 운영 설정으로 복사하지 마세요. 현재 구현과 회사 공용 적용 방법은 루트 `README.md`, `contracts/company-global.md`, `.github/workflows/reusable-ai-review-gate.yml`을 기준으로 합니다.
+
 ## 1. 프로젝트 한 줄 요약
 
 AI 코딩 도구가 만든 PR diff를 **AGENTS.md에 정의된 팀 컨벤션** 기준으로 리뷰하고, 결과를 **Structured Outputs(JSON)** 로 받은 뒤 **Markdown PR 코멘트**로 렌더링하는 데모 프로젝트입니다.

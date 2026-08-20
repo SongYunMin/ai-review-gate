@@ -1,0 +1,207 @@
+name: Reusable AI Review Gate
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: 회사에서 승인한 model ID
+        required: true
+        type: string
+      contract_paths:
+        description: 낮은 우선순위부터 높은 우선순위 순서의 프로젝트 계약 경로
+        required: false
+        default: |-
+          AGENTS.md
+          CLAUDE.md
+        type: string
+      max_diff_bytes:
+        description: 최대 PR diff byte 수
+        required: false
+        default: 500000
+        type: number
+      max_changed_files:
+        description: 최대 변경 파일 수
+        required: false
+        default: 200
+        type: number
+      enforce:
+        description: BLOCKED decision을 required check 실패로 처리할지 여부
+        required: false
+        default: false
+        type: boolean
+      comment:
+        description: PR issue comment를 생성하거나 업데이트할지 여부
+        required: false
+        default: true
+        type: boolean
+      fail_on_tool_error:
+        description: comment-only 모드에서도 provider 또는 입력 오류를 check 실패로 처리할지 여부
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      ai_api_key:
+        description: 승인된 Gemini-compatible API key
+        required: true
+    outputs:
+      decision:
+        description: PASS, WARN, BLOCKED 또는 NOT_EVALUATED
+        value: ${{ jobs.review.outputs.decision }}
+      failure_kind:
+        description: none, policy 또는 operational
+        value: ${{ jobs.review.outputs.failure_kind }}
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    concurrency:
+      group: ai-review-gate-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    outputs:
+      decision: ${{ steps.final_status.outputs.decision }}
+      failure_kind: ${{ steps.final_status.outputs.failure_kind }}
+
+    steps:
+      - name: 중앙 AI Review Gate 실행
+        id: engine
+        continue-on-error: true
+        uses: $/.github/actions/ai-review-gate
+        with:
+          github_token: ${{ github.token }}
+          ai_api_key: ${{ secrets.ai_api_key }}
+          model: ${{ inputs.model }}
+          contract_paths: ${{ inputs.contract_paths }}
+          max_diff_bytes: ${{ inputs.max_diff_bytes }}
+          max_changed_files: ${{ inputs.max_changed_files }}
+
+      - name: 안전한 fallback 리포트 보장
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p reports
+          if [ ! -f reports/review-report.md ]; then
+            {
+              echo '<!-- ai-review-gate-report -->'
+              echo
+              echo '# AI Review Gate 리포트'
+              echo
+              echo 'AI Review Gate가 평가를 완료하지 못했습니다. workflow 로그를 확인하세요.'
+              echo
+              echo '이 상태는 정책 PASS가 아니라 NOT_EVALUATED입니다.'
+            } > reports/review-report.md
+          fi
+
+      - name: Review Gate 리포트 업로드
+        id: artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ai-review-gate-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: reports/
+          if-no-files-found: error
+
+      - name: 현재 PR head 확인
+        id: freshness
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          CURRENT_HEAD_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          STATUS=$?
+          set -e
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo 'state=error' >> "$GITHUB_OUTPUT"
+          elif [ "$CURRENT_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+            echo 'state=stale' >> "$GITHUB_OUTPUT"
+          else
+            echo 'state=fresh' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: PR 리포트 코멘트 생성 또는 업데이트
+        id: comment
+        if: ${{ always() && inputs.comment && steps.freshness.outputs.state == 'fresh' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          COMMENT_ID=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+              --jq '.[] | select(.user.type == "Bot" and (.body | contains("<!-- ai-review-gate-report -->"))) | .id' \
+              | head -n 1
+          )
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+              -F body=@reports/review-report.md
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -F body=@reports/review-report.md
+          fi
+
+      - name: 정책 차단과 운영 오류를 분리해 최종 처리
+        id: final_status
+        if: always()
+        shell: bash
+        env:
+          ENGINE_DECISION: ${{ steps.engine.outputs.decision }}
+          ENGINE_OUTCOME: ${{ steps.engine.outcome }}
+          ENGINE_FAILURE_KIND: ${{ steps.engine.outputs.failure_kind }}
+          FRESHNESS_STATE: ${{ steps.freshness.outputs.state }}
+          COMMENT_OUTCOME: ${{ steps.comment.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifact.outcome }}
+          ENFORCE: ${{ inputs.enforce }}
+          COMMENT_ENABLED: ${{ inputs.comment }}
+          FAIL_ON_TOOL_ERROR: ${{ inputs.fail_on_tool_error }}
+        run: |
+          TOOL_ERROR=false
+          if [ "$ENGINE_OUTCOME" = 'failure' ] || [ "$ENGINE_FAILURE_KIND" = 'operational' ]; then
+            TOOL_ERROR=true
+          fi
+          if [ "$FRESHNESS_STATE" != 'fresh' ] || [ "$ARTIFACT_OUTCOME" = 'failure' ]; then
+            TOOL_ERROR=true
+          fi
+          if [ "$COMMENT_ENABLED" = 'true' ] && [ "$COMMENT_OUTCOME" = 'failure' ]; then
+            TOOL_ERROR=true
+          fi
+
+          if [ "$TOOL_ERROR" = 'true' ]; then
+            DECISION=NOT_EVALUATED
+            FAILURE_KIND=operational
+          elif [ "$ENGINE_DECISION" = 'BLOCKED' ]; then
+            DECISION=BLOCKED
+            FAILURE_KIND=policy
+          elif [ "$ENGINE_DECISION" = 'PASS' ] || [ "$ENGINE_DECISION" = 'WARN' ]; then
+            DECISION="$ENGINE_DECISION"
+            FAILURE_KIND=none
+          else
+            DECISION=NOT_EVALUATED
+            FAILURE_KIND=operational
+          fi
+
+          echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+          echo "failure_kind=$FAILURE_KIND" >> "$GITHUB_OUTPUT"
+
+          if [ "$ENFORCE" = 'true' ] && [ "$DECISION" = 'BLOCKED' ]; then
+            echo 'Review Contract 정책 위반으로 merge를 차단합니다.' >&2
+            exit 10
+          fi
+
+          if [ "$FAILURE_KIND" = 'operational' ] && \
+             { [ "$ENFORCE" = 'true' ] || [ "$FAIL_ON_TOOL_ERROR" = 'true' ]; }; then
+            echo 'AI Review Gate 운영 오류로 check를 실패 처리합니다.' >&2
+            exit 2
+          fi

@@ -3,6 +3,7 @@ export type ReviewSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export type ReviewRule = {
   ruleId: string;
+  source: string;
   title: string;
   severity: ReviewSeverity;
   gate: ReviewGate;
@@ -10,6 +11,12 @@ export type ReviewRule = {
   rule: string;
   violationExamples: string[];
   expectedEvidence: string[];
+};
+
+export type ReviewContractDocument = {
+  source: string;
+  markdown: string;
+  required?: boolean;
 };
 
 const severityValues: ReviewSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
@@ -88,11 +95,13 @@ const extractListSection = (body: string, label: string): string[] =>
     .map((line) => line.slice(2).trim())
     .filter(Boolean);
 
-const parseRule = (ruleMarkdown: string): ReviewRule => {
-  const headerMatch = ruleMarkdown.match(/^###\s+(R-[A-Z]+-\d{3}):\s+(.+)$/m);
+const ruleHeaderPattern = 'R-[A-Z]+(?:-[A-Z]+)*-\\d{3}';
+
+const parseRule = (ruleMarkdown: string, source: string): ReviewRule => {
+  const headerMatch = ruleMarkdown.match(new RegExp(`^###\\s+(${ruleHeaderPattern}):\\s+(.+)$`, 'm'));
 
   if (!headerMatch) {
-    throw new Error('Review Contract 규칙 헤더는 "### R-XXX-000: 제목" 형식이어야 합니다.');
+    throw new Error('Review Contract 규칙 헤더는 "### R-XXX[-YYY]-000: 제목" 형식이어야 합니다.');
   }
 
   const [, ruleId, title] = headerMatch;
@@ -100,43 +109,93 @@ const parseRule = (ruleMarkdown: string): ReviewRule => {
   const severity = assertReviewSeverity(ruleId, extractSingleLineField(ruleId, body, 'Severity'));
   const gate = assertReviewGate(ruleId, extractSingleLineField(ruleId, body, 'Gate'));
   const rule = extractTextSection(ruleId, body, 'Rule', true);
+  const appliesTo = extractListSection(body, 'Applies to');
+  const expectedEvidence = extractListSection(body, 'Expected evidence');
+
+  if (appliesTo.length === 0) {
+    throw new Error(`${ruleId} 규칙에 Applies to 항목이 없습니다.`);
+  }
+
+  if (expectedEvidence.length === 0) {
+    throw new Error(`${ruleId} 규칙에 Expected evidence 항목이 없습니다.`);
+  }
 
   return {
     ruleId,
+    source,
     title: title.trim(),
     severity,
     gate,
-    appliesTo: extractListSection(body, 'Applies to'),
+    appliesTo,
     rule,
     violationExamples: extractListSection(body, 'Violation examples'),
-    expectedEvidence: extractListSection(body, 'Expected evidence'),
+    expectedEvidence,
   };
 };
 
-export const parseReviewContract = (agentsMd: string): ReviewRule[] => {
-  const contractStart = agentsMd.search(/^## Review Contract\s*$/m);
+export const parseReviewContract = (markdown: string, source = 'AGENTS.md'): ReviewRule[] => {
+  const contractStart = markdown.search(/^## Review Contract\s*$/m);
 
   if (contractStart === -1) {
-    throw new Error('AGENTS.md에 "## Review Contract" 섹션이 없습니다.');
+    throw new Error(`${source}에 "## Review Contract" 섹션이 없습니다.`);
   }
 
-  const contractMarkdown = agentsMd.slice(contractStart);
-  const ruleHeaderMatches = [...contractMarkdown.matchAll(/^###\s+R-[A-Z]+-\d{3}:.+$/gm)];
+  const contractMarkdown = markdown.slice(contractStart);
+  const ruleHeaderMatches = [
+    ...contractMarkdown.matchAll(new RegExp(`^###\\s+${ruleHeaderPattern}:.+$`, 'gm')),
+  ];
 
   if (ruleHeaderMatches.length === 0) {
     throw new Error('Review Contract에 파싱 가능한 규칙이 없습니다.');
   }
 
-  return ruleHeaderMatches.map((match, index) => {
+  const rules = ruleHeaderMatches.map((match, index) => {
     const start = match.index!;
     const next = ruleHeaderMatches[index + 1]?.index ?? contractMarkdown.length;
     const ruleMarkdown = contractMarkdown.slice(start, next).replace(/^---\s*$/gm, '').trim();
-    return parseRule(ruleMarkdown);
+    return parseRule(ruleMarkdown, source);
   });
+
+  const seenRuleIds = new Set<string>();
+
+  for (const rule of rules) {
+    if (seenRuleIds.has(rule.ruleId)) {
+      throw new Error(`${source}에 ${rule.ruleId} 규칙이 중복되어 있습니다.`);
+    }
+
+    seenRuleIds.add(rule.ruleId);
+  }
+
+  return rules;
+};
+
+export const mergeReviewContracts = (documents: ReviewContractDocument[]): ReviewRule[] => {
+  const rulesById = new Map<string, ReviewRule>();
+
+  for (const document of documents) {
+    if (!/^## Review Contract\s*$/m.test(document.markdown)) {
+      if (document.required) {
+        throw new Error(`${document.source}에 "## Review Contract" 섹션이 없습니다.`);
+      }
+
+      continue;
+    }
+
+    for (const rule of parseReviewContract(document.markdown, document.source)) {
+      rulesById.set(rule.ruleId, rule);
+    }
+  }
+
+  if (rulesById.size === 0) {
+    throw new Error('Review Contract에 파싱 가능한 규칙이 없습니다.');
+  }
+
+  return [...rulesById.values()];
 };
 
 export const formatRulesForPrompt = (rules: ReviewRule[]): string =>
   rules
+    .filter((rule) => rule.gate !== 'off')
     .map((rule) => {
       const appliesTo = rule.appliesTo.length > 0 ? rule.appliesTo.join(', ') : '(not specified)';
       const violationExamples =
@@ -146,6 +205,7 @@ export const formatRulesForPrompt = (rules: ReviewRule[]): string =>
 
       return [
         `- ${rule.ruleId}: ${rule.title}`,
+        `  Source: ${rule.source}`,
         `  Severity: ${rule.severity}`,
         `  Gate: ${rule.gate}`,
         `  Applies to: ${appliesTo}`,

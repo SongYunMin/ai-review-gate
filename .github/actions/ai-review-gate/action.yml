@@ -1,0 +1,106 @@
+name: AI Review Gate Engine
+description: base 브랜치의 Review Contract와 PR diff를 안전하게 평가합니다.
+
+inputs:
+  github_token:
+    description: PR diff와 base 계약 파일을 읽는 GitHub token
+    required: true
+  ai_api_key:
+    description: 승인된 Gemini-compatible API key
+    required: true
+  model:
+    description: 회사에서 승인한 model ID
+    required: true
+  contract_paths:
+    description: 낮은 우선순위부터 높은 우선순위 순서의 프로젝트 계약 경로
+    required: false
+    default: |-
+      AGENTS.md
+      CLAUDE.md
+  max_diff_bytes:
+    description: 모델에 전달할 PR diff의 최대 UTF-8 byte 수
+    required: false
+    default: '500000'
+  max_changed_files:
+    description: 평가할 최대 변경 파일 수
+    required: false
+    default: '200'
+
+outputs:
+  decision:
+    description: PASS, WARN, BLOCKED 또는 NOT_EVALUATED
+    value: ${{ steps.review.outputs.decision }}
+  failure_kind:
+    description: none, policy 또는 operational
+    value: ${{ steps.review.outputs.failure_kind }}
+  review_exit_code:
+    description: Review engine process exit code
+    value: ${{ steps.review.outputs.review_exit_code }}
+  report_path:
+    description: Markdown report path
+    value: ${{ steps.review.outputs.report_path }}
+  result_path:
+    description: Structured JSON result path
+    value: ${{ steps.review.outputs.result_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Node.js 22 설정
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: '22'
+
+    - name: 중앙 Review Gate 의존성 설치
+      shell: bash
+      run: |
+        TOOL_ROOT=$(cd "${{ github.action_path }}/../../.." && pwd)
+        npm --prefix "$TOOL_ROOT" ci --ignore-scripts
+
+    - name: PR Review Contract 평가
+      id: review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GEMINI_API_KEY: ${{ inputs.ai_api_key }}
+        GEMINI_MODEL: ${{ inputs.model }}
+        AI_REVIEW_PROJECT_CONTRACT_PATHS: ${{ inputs.contract_paths }}
+        AI_REVIEW_MAX_DIFF_BYTES: ${{ inputs.max_diff_bytes }}
+        AI_REVIEW_MAX_CHANGED_FILES: ${{ inputs.max_changed_files }}
+      run: |
+        TOOL_ROOT=$(cd "${{ github.action_path }}/../../.." && pwd)
+        export AI_REVIEW_TOOL_ROOT="$TOOL_ROOT"
+        export AI_REVIEW_ENFORCE=0
+
+        set +e
+        "$TOOL_ROOT/node_modules/.bin/tsx" "$TOOL_ROOT/scripts/ai-review.ts" --github-pr
+        REVIEW_EXIT_CODE=$?
+        set -e
+
+        mkdir -p reports
+
+        if [ "$REVIEW_EXIT_CODE" -eq 0 ] && [ -f reports/review-result.json ]; then
+          DECISION=$(node -e '
+            const result = require(process.cwd() + "/reports/review-result.json");
+            const decision = result.shouldBlockMerge
+              ? "BLOCKED"
+              : result.violations.some((violation) => violation.violated)
+                ? "WARN"
+                : "PASS";
+            process.stdout.write(decision);
+          ')
+          if [ "$DECISION" = "BLOCKED" ]; then
+            FAILURE_KIND=policy
+          else
+            FAILURE_KIND=none
+          fi
+        else
+          DECISION=NOT_EVALUATED
+          FAILURE_KIND=operational
+        fi
+
+        echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+        echo "failure_kind=$FAILURE_KIND" >> "$GITHUB_OUTPUT"
+        echo "review_exit_code=$REVIEW_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        echo "report_path=reports/review-report.md" >> "$GITHUB_OUTPUT"
+        echo "result_path=reports/review-result.json" >> "$GITHUB_OUTPUT"

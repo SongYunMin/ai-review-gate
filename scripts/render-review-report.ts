@@ -13,7 +13,7 @@ import {
 export const defaultReviewResultPath = path.join('reports', 'review-result.json');
 export const defaultReviewReportPath = path.join('reports', 'review-report.md');
 
-type GateDecision = 'BLOCKED' | 'WARN' | 'PASS';
+type GateDecision = 'NOT_EVALUATED' | 'BLOCKED' | 'WARN' | 'PASS';
 
 type CiCheckResult = {
   check: 'npm run build' | 'npm test';
@@ -72,20 +72,28 @@ export const resolveGateDecision = (result: ReviewResult): GateDecision => {
     return 'BLOCKED';
   }
 
+  if ((result.validationWarnings?.length ?? 0) > 0) {
+    return 'NOT_EVALUATED';
+  }
+
   const hasNonBlockingViolation = result.violations.some((violation) => violation.violated);
   return hasNonBlockingViolation ? 'WARN' : 'PASS';
 };
 
 const gateDecisionMessage = (decision: GateDecision): string => {
+  if (decision === 'NOT_EVALUATED') {
+    return 'AI 응답 일부가 계약 검증을 통과하지 못해 이 PR의 정책 결과를 확정하지 않았습니다.';
+  }
+
   if (decision === 'BLOCKED') {
-    return '이 PR은 AGENTS.md Review Contract 기준으로 merge 차단 대상입니다.';
+    return '이 PR은 적용된 Review Contract 기준으로 merge 차단 대상입니다.';
   }
 
   if (decision === 'WARN') {
     return '이 PR은 merge 차단 대상은 아니지만 Review Contract violation 검토가 필요합니다.';
   }
 
-  return '이 PR은 AGENTS.md Review Contract 기준으로 차단 위반이 없습니다.';
+  return '이 PR은 적용된 Review Contract 기준으로 차단 위반이 없습니다.';
 };
 
 const parseExitCodeForCheck = (ciContext: string, check: CiCheckResult['check']): number | undefined => {
@@ -125,12 +133,18 @@ export const parseCiContext = (ciContext?: string): CiCheckResult[] => {
 // structured violation result를 사람이 읽는 한국어 Markdown 리포트로 변환합니다.
 export const renderReviewReport = (result: ReviewResult, options: RenderReviewReportOptions = {}): string => {
   const violatedRules = result.violations.filter((violation) => violation.violated);
-  const blockingViolations = violatedRules.filter((violation) => violation.gate === 'error');
-  const warningViolations = violatedRules.filter((violation) => violation.gate === 'warning');
+  const blockingViolations = violatedRules.filter(
+    (violation) =>
+      violation.gate === 'error' &&
+      violation.enforcement !== 'advisory' &&
+      (violation.confidence === 'MEDIUM' || violation.confidence === 'HIGH'),
+  );
+  const warningViolations = violatedRules.filter((violation) => !blockingViolations.includes(violation));
   const severityCounts = countBySeverity(violatedRules);
   const gateCounts = countByGate(violatedRules);
   const decision = resolveGateDecision(result);
   const ciChecks = parseCiContext(options.ciContext);
+  const validationWarnings = result.validationWarnings ?? [];
   const lines: string[] = [
     '<!-- ai-review-gate-report -->',
     '',
@@ -146,7 +160,7 @@ export const renderReviewReport = (result: ReviewResult, options: RenderReviewRe
     `| Enforcement | ${options.enforce ? 'ON' : 'OFF'} |`,
     `| Blocking violations | ${blockingViolations.length} |`,
     `| Warning violations | ${warningViolations.length} |`,
-    '| Decision rule | `gate=error && confidence>=MEDIUM` |',
+    '| Decision rule | `gate=error && enforcement=deterministic && confidence>=MEDIUM` |',
     '',
     '## Blocking Rules',
     '',
@@ -179,6 +193,12 @@ export const renderReviewReport = (result: ReviewResult, options: RenderReviewRe
     '',
     result.summary,
     '',
+    '## AI 응답 검증 경고',
+    '',
+    ...(validationWarnings.length > 0
+      ? validationWarnings.map((warning) => `- ${warning}`)
+      : ['검증에서 제외된 AI 응답은 없습니다.']),
+    '',
     '## 심각도별 지적 사항 수',
     '',
     '| 심각도 | 개수 |',
@@ -193,11 +213,11 @@ export const renderReviewReport = (result: ReviewResult, options: RenderReviewRe
     '',
     '## 규칙 위반 표',
     '',
-    '| Rule | Severity | Gate | Confidence | File |',
-    '|---|---|---|---|---|',
+    '| Rule | Severity | Gate | Enforcement | Confidence | File |',
+    '|---|---|---|---|---|---|',
     ...violatedRules.map(
       (violation) =>
-        `| ${escapeTableCell(violation.ruleId)} | ${violation.severity} | ${violation.gate} | ${violation.confidence} | ${escapeTableCell(
+        `| ${escapeTableCell(violation.ruleId)} | ${violation.severity} | ${violation.gate} | ${violation.enforcement ?? 'deterministic'} | ${violation.confidence} | ${escapeTableCell(
           violation.file,
         )} |`,
     ),
@@ -210,9 +230,10 @@ export const renderReviewReport = (result: ReviewResult, options: RenderReviewRe
     lines.push(
       `### ${violation.ruleId} — ${violation.ruleTitle}`,
       '',
-      `- **Contract:** \`AGENTS.md > ${violation.ruleId}\``,
+      `- **Contract:** \`${violation.source ?? 'AGENTS.md'} > ${violation.ruleId}\``,
       `- **Severity:** ${violation.severity}`,
       `- **Gate:** ${violation.gate}`,
+      `- **Enforcement:** ${violation.enforcement ?? 'deterministic'}`,
       `- **Confidence:** ${violation.confidence}`,
       `- **File:** \`${violation.file}\``,
       `- **Line hint:** ${violation.lineHint}`,

@@ -4,6 +4,7 @@ import type { ReviewResult, ReviewViolation } from '../schemas/review-result.sch
 
 const makeViolation = (overrides: Partial<ReviewViolation> = {}): ReviewViolation => ({
   ruleId: 'R-AUTH-001',
+  source: 'contracts/company-global.md',
   ruleTitle: 'Ownership or enrollment validation is required',
   category: 'AUTHORIZATION',
   severity: 'CRITICAL',
@@ -80,18 +81,19 @@ describe('renderReviewReport', () => {
     expect(report).toContain('| Enforcement | ON |');
     expect(report).toContain('| Blocking violations | 1 |');
     expect(report).toContain('| Warning violations | 1 |');
-    expect(report).toContain('| Decision rule | `gate=error && confidence>=MEDIUM` |');
+    expect(report).toContain('| Decision rule | `gate=error && enforcement=deterministic && confidence>=MEDIUM` |');
     expect(blockingRules).toContain('| R-AUTH-001 | CRITICAL | HIGH | 컨트롤러에서 수강 여부 확인 없이 완료 처리를 수행합니다. |');
     expect(blockingRules).not.toContain('R-IDEMP-001');
     expect(report).toContain('## CI Context');
     expect(report).toContain('| npm run build | 0 |');
     expect(report).toContain('| npm test | 0 |');
     expect(report).toContain('빌드와 테스트 결과가 통과하더라도 Review Contract 위반은 별도의 merge decision으로 처리될 수 있습니다.');
-    expect(report).toContain('| Rule | Severity | Gate | Confidence | File |');
-    expect(report).toContain('| R-AUTH-001 | CRITICAL | error | HIGH | src/controllers/lessonProgressController.ts |');
+    expect(report).toContain('| Rule | Severity | Gate | Enforcement | Confidence | File |');
+    expect(report).toContain('| R-AUTH-001 | CRITICAL | error | deterministic | HIGH | src/controllers/lessonProgressController.ts |');
     expect(report).toContain('### R-AUTH-001 — Ownership or enrollment validation is required');
-    expect(report).toContain('- **Contract:** `AGENTS.md > R-AUTH-001`');
+    expect(report).toContain('- **Contract:** `contracts/company-global.md > R-AUTH-001`');
     expect(report).toContain('- **Gate:** error');
+    expect(report).toContain('- **Enforcement:** deterministic');
     expect(report).toContain('- **Confidence:** HIGH');
     expect(report).toContain('- **File:** `src/controllers/lessonProgressController.ts`');
     expect(report).toContain('- **Line hint:** completeLesson 내부 처리');
@@ -142,5 +144,74 @@ describe('renderReviewReport', () => {
     expect(report).toContain('| Blocking violations | 0 |');
     expect(report).toContain('| Warning violations | 1 |');
     expect(report).toContain('차단 규칙 위반은 없습니다.');
+  });
+
+  it('모델 결과에서 제외한 항목을 검증 경고로 표시한다', () => {
+    const result: ReviewResult = {
+      summary: '검증 가능한 위반은 없습니다.',
+      overallRisk: 'LOW',
+      shouldBlockMerge: false,
+      violations: [],
+      validationWarnings: ['알 수 없는 rule ID를 제외했습니다: R-INVENTED-999'],
+    };
+
+    const report = renderReviewReport(result);
+
+    expect(report).toContain('## 🚦 Gate Decision: NOT_EVALUATED');
+    expect(report).toContain('## AI 응답 검증 경고');
+    expect(report).toContain('- 알 수 없는 rule ID를 제외했습니다: R-INVENTED-999');
+  });
+
+  it('LOW confidence error gate는 차단이 아니라 non-blocking violation으로 집계한다', () => {
+    const result: ReviewResult = {
+      summary: '근거가 약한 error gate 후보입니다.',
+      overallRisk: 'HIGH',
+      shouldBlockMerge: false,
+      violations: [
+        makeViolation({
+          severity: 'HIGH',
+          gate: 'error',
+          confidence: 'LOW',
+        }),
+      ],
+    };
+
+    const report = renderReviewReport(result);
+    const blockingRules = getSection(report, '## Blocking Rules', '## CI Context');
+
+    expect(report).toContain('## 🚦 Gate Decision: WARN');
+    expect(report).toContain('| Blocking violations | 0 |');
+    expect(report).toContain('| Warning violations | 1 |');
+    expect(blockingRules).not.toContain('R-AUTH-001');
+  });
+
+  it('검증 경고가 있어도 유효한 차단 위반의 BLOCKED decision을 유지한다', () => {
+    const result: ReviewResult = {
+      summary: '유효한 차단 위반이 있습니다.',
+      overallRisk: 'CRITICAL',
+      shouldBlockMerge: true,
+      violations: [makeViolation()],
+      validationWarnings: ['알 수 없는 rule ID를 제외했습니다: R-INVENTED-999'],
+    };
+
+    const report = renderReviewReport(result);
+
+    expect(report).toContain('## 🚦 Gate Decision: BLOCKED');
+    expect(report).toContain('## AI 응답 검증 경고');
+  });
+
+  it('AI-only error gate는 advisory로 표시하고 blocking 집계에서 제외한다', () => {
+    const result: ReviewResult = {
+      summary: '사람이 확인할 error finding입니다.',
+      overallRisk: 'CRITICAL',
+      shouldBlockMerge: false,
+      violations: [makeViolation({ enforcement: 'advisory' })],
+    };
+
+    const report = renderReviewReport(result);
+
+    expect(report).toContain('## 🚦 Gate Decision: WARN');
+    expect(report).toContain('| Blocking violations | 0 |');
+    expect(report).toContain('- **Enforcement:** advisory');
   });
 });

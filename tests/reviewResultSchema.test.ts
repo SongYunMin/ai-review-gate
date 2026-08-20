@@ -49,4 +49,37 @@ describe('ReviewResultSchema', () => {
 
     expect(ReviewResultSchema.parse(lowConfidenceResult).shouldBlockMerge).toBe(false);
   });
+
+  it('overallRisk는 실제 위반 중 가장 높은 severity와 일치해야 한다', () => {
+    expect(() =>
+      ReviewResultSchema.parse({
+        ...blockingResult,
+        overallRisk: 'LOW',
+      }),
+    ).toThrow(/overallRisk/);
+
+    expect(
+      ReviewResultSchema.parse({
+        summary: '위반이 없습니다.',
+        overallRisk: 'LOW',
+        shouldBlockMerge: false,
+        violations: [],
+      }).overallRisk,
+    ).toBe('LOW');
+  });
+
+  it('AI-only error finding은 advisory로 보존하되 shouldBlockMerge=false를 요구한다', () => {
+    const advisoryResult = {
+      ...blockingResult,
+      shouldBlockMerge: false,
+      violations: [
+        {
+          ...blockingResult.violations[0],
+          enforcement: 'advisory',
+        },
+      ],
+    };
+
+    expect(ReviewResultSchema.parse(advisoryResult).shouldBlockMerge).toBe(false);
+  });
 });
